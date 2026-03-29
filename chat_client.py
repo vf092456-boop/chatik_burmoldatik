@@ -1,56 +1,82 @@
 import socket
 import threading
 import sys
+from colorama import init, Fore, Style
+import getpass
 
-# Настройки подключения
-HOST = '127.0.0.1'  # IP сервера (при запуске на разных машинах укажите реальный IP)
-PORT = 12345
+from crypto_utils import encrypt, decrypt
+
+# Инициализация colorama для Windows
+init(autoreset=True)
 
 def receive_messages(client_socket):
-    """Постоянно получает сообщения от сервера и выводит их на экран."""
-    try:
-        while True:
-            message = client_socket.recv(1024).decode('utf-8')
-            if not message:
+    """Поток приёма сообщений"""
+    while True:
+        try:
+            encrypted = client_socket.recv(1024).decode('utf-8')
+            if not encrypted:
                 break
-            print(f"\n{message}")  # вывод сообщения с новой строки
-            # После вывода снова выводим приглашение для ввода (необязательно)
-            print("Вы: ", end="", flush=True)
-    except:
-        pass
-    finally:
-        print("Соединение с сервером потеряно.")
-        client_socket.close()
-        sys.exit(0)
+            message = decrypt(encrypted)
+            # Форматируем вывод: если сообщение системное, оно уже содержит эмодзи или начинается с /
+            if message.startswith("ERROR:"):
+                print(f"{Fore.RED}{message}{Style.RESET_ALL}")
+            elif message.startswith("REGISTER_OK"):
+                print(f"{Fore.GREEN}Регистрация успешна! Можете писать сообщения.{Style.RESET_ALL}")
+            else:
+                # Обычное сообщение: выводим с новой строки
+                print(f"\r{Fore.CYAN}{message}{Style.RESET_ALL}")
+                # Возвращаем приглашение на новой строке
+                print(f"{Fore.YELLOW}Вы: {Style.RESET_ALL}", end="", flush=True)
+        except Exception as e:
+            print(f"\n{Fore.RED}Ошибка соединения: {e}{Style.RESET_ALL}")
+            break
+    # При выходе из цикла закрываем сокет
+    client_socket.close()
+    print(f"{Fore.RED}Соединение разорвано.{Style.RESET_ALL}")
+    sys.exit(0)
 
-def start_client():
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def start_client(host, port):
+    client_socket = socket.socket(socket.AF_INTERNET, socket.SOCK_STREAM)
     try:
-        client_socket.connect((HOST, PORT))
-    except:
-        print("Не удалось подключиться к серверу.")
+        client_socket.connect((host, port))
+    except Exception as e:
+        print(f"{Fore.RED}Не удалось подключиться к серверу: {e}{Style.RESET_ALL}")
         return
 
-    print("Подключено к чату. Введите /quit для выхода.")
+    # Запрашиваем имя пользователя
+    username = input(f"{Fore.YELLOW}Введите ваше имя: {Style.RESET_ALL}").strip()
+    if not username:
+        print(f"{Fore.RED}Имя не может быть пустым{Style.RESET_ALL}")
+        return
 
-    # Запускаем поток для приёма сообщений
-    receive_thread = threading.Thread(target=receive_messages, args=(client_socket,), daemon=True)
-    receive_thread.start()
+    # Отправляем регистрацию
+    client_socket.send(encrypt(f"REGISTER:{username}").encode('utf-8'))
 
-    # Основной цикл для отправки сообщений
+    # Запускаем поток приёма
+    recv_thread = threading.Thread(target=receive_messages, args=(client_socket,), daemon=True)
+    recv_thread.start()
+
+    # Основной цикл отправки
+    print(f"{Fore.GREEN}Подключено к чату. Введите /quit для выхода.{Style.RESET_ALL}")
     try:
         while True:
-            message = input("Вы: ")
-            if message.lower() == "/quit":
+            msg = input(f"{Fore.YELLOW}Вы: {Style.RESET_ALL}")
+            if msg.lower() == "/quit":
+                client_socket.send(encrypt("/quit").encode('utf-8'))
                 break
-            # Отправляем сообщение, добавляя метку имени (для простоты имя не запрашиваем)
-            # Можно добавить имя пользователя, но в данном примере сообщения просто пересылаются как есть
-            client_socket.send(message.encode('utf-8'))
-    except:
+            if msg:
+                client_socket.send(encrypt(msg).encode('utf-8'))
+    except KeyboardInterrupt:
         pass
     finally:
         client_socket.close()
         sys.exit(0)
 
 if __name__ == "__main__":
-    start_client()
+    if len(sys.argv) != 3:
+        print(f"Использование: python client.py <хост> <порт>")
+        print(f"Пример: python client.py 5.tcp.eu.ngrok.io 13775")
+        sys.exit(1)
+    host = sys.argv[1]
+    port = int(sys.argv[2])
+    start_client(host, port)
